@@ -28,3 +28,15 @@ Note: If you are working with the Social Harvest Dashboard and are developing lo
 running the dashboard on a Node.js server with a port of ```8881``` (by default) and you will need to configure CORS for that origin. 
 You can add as many allowed origins as you like in the configuration.
 
+## Running
+
+To run the reporter API server, you should compile it into a binary and run that. However, you can also run it via:
+
+```
+go run main.go database.go routes.go
+```
+
+There are several files for organization purposes, so you'll need to include those when using ```go run```. You'll also want to 
+make sure the config file is next to the binary (or main.go) unless you defined a different path using ```---conf=```.
+
+You should be able access the API server on port 3001 unless you configured it differently.

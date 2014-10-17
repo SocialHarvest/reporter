@@ -40,16 +40,16 @@ type BasicAuthMw struct {
 }
 
 func (bamw *BasicAuthMw) MiddlewareFunc(handler rest.HandlerFunc) rest.HandlerFunc {
-	return func(writer rest.ResponseWriter, request *rest.Request) {
+	return func(w rest.ResponseWriter, r *rest.Request) {
 
-		authHeader := request.Header.Get("Authorization")
+		authHeader := r.Header.Get("Authorization")
 		log.Println(authHeader)
 		if authHeader == "" {
-			queryParams := request.URL.Query()
+			queryParams := r.URL.Query()
 			if len(queryParams["apiKey"]) > 0 {
 				bamw.Key = queryParams["apiKey"][0]
 			} else {
-				bamw.unauthorized(writer)
+				bamw.unauthorized(w)
 				return
 			}
 		} else {
@@ -64,17 +64,17 @@ func (bamw *BasicAuthMw) MiddlewareFunc(handler rest.HandlerFunc) rest.HandlerFu
 		}
 
 		if !keyFound {
-			bamw.unauthorized(writer)
+			bamw.unauthorized(w)
 			return
 		}
 
-		handler(writer, request)
+		handler(w, r)
 	}
 }
 
-func (bamw *BasicAuthMw) unauthorized(writer rest.ResponseWriter) {
-	writer.Header().Set("WWW-Authenticate", "Basic realm="+bamw.Realm)
-	rest.Error(writer, "Not Authorized", http.StatusUnauthorized)
+func (bamw *BasicAuthMw) unauthorized(w rest.ResponseWriter) {
+	w.Header().Set("WWW-Authenticate", "Basic realm="+bamw.Realm)
+	rest.Error(w, "Not Authorized", http.StatusUnauthorized)
 }
 
 // Main - initializes, configures, and sets routes for API
@@ -141,7 +141,7 @@ func main() {
 			restMiddleware = append(restMiddleware,
 				&rest.CorsMiddleware{
 					RejectNonCorsRequests: false,
-					OriginValidator: func(origin string, request *rest.Request) bool {
+					OriginValidator: func(origin string, r *rest.Request) bool {
 						for _, allowedOrigin := range socialHarvest.Config.Server.Cors.AllowedOrigins {
 							// If the request origin matches one of the allowed origins, return true
 							if origin == allowedOrigin {
@@ -173,7 +173,9 @@ func main() {
 			PreRoutingMiddlewares:    restMiddleware,
 		}
 		err := handler.SetRoutes(
-		//&rest.Route{"GET", "/", Home},
+			&rest.Route{"GET", "/", TopLocations},
+			&rest.Route{"GET", "/territory/list", TerritoryList},
+			&rest.Route{"GET", "/link/details", LinkDetails},
 		)
 		if err != nil {
 			log.Fatal(err)
