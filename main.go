@@ -57,7 +57,7 @@ func (bamw *BasicAuthMw) MiddlewareFunc(handler rest.HandlerFunc) rest.HandlerFu
 		}
 
 		keyFound := false
-		for _, key := range socialHarvest.Config.Server.AuthKeys {
+		for _, key := range socialHarvest.Config.ReporterServer.AuthKeys {
 			if bamw.Key == key {
 				keyFound = true
 			}
@@ -126,23 +126,23 @@ func main() {
 	color.Cyan("   ")
 
 	// Continue configuration
-	socialHarvest.Database = config.NewDatabase(socialHarvest.Config)
-	if socialHarvest.Database.Postgres != nil {
-		defer socialHarvest.Database.Postgres.Close()
+	newDatabase(socialHarvest.Config)
+	if db.Postgres != nil {
+		defer db.Postgres.Close()
 	}
 
-	// The RESTful API server can be completely disabled by setting {"server":{"disabled": true}} in the config
+	// The RESTful API reporter server can be completely disabled by setting {"reporterServer":{"disabled": true}} in the config
 	// TODO: Think about accepting command line arguments for reporting/exporting.
-	if !socialHarvest.Config.Server.Disabled {
+	if !socialHarvest.Config.ReporterServer.Disabled {
 		restMiddleware := []rest.Middleware{}
 
 		// If additional origins were allowed for CORS, handle them
-		if len(socialHarvest.Config.Server.Cors.AllowedOrigins) > 0 {
+		if len(socialHarvest.Config.ReporterServer.Cors.AllowedOrigins) > 0 {
 			restMiddleware = append(restMiddleware,
 				&rest.CorsMiddleware{
 					RejectNonCorsRequests: false,
 					OriginValidator: func(origin string, r *rest.Request) bool {
-						for _, allowedOrigin := range socialHarvest.Config.Server.Cors.AllowedOrigins {
+						for _, allowedOrigin := range socialHarvest.Config.ReporterServer.Cors.AllowedOrigins {
 							// If the request origin matches one of the allowed origins, return true
 							if origin == allowedOrigin {
 								return true
@@ -159,7 +159,7 @@ func main() {
 			)
 		}
 		// If api keys are defined, setup basic auth (any key listed allows full access, there are no roles for now, this is just very basic auth)
-		if len(socialHarvest.Config.Server.AuthKeys) > 0 {
+		if len(socialHarvest.Config.ReporterServer.AuthKeys) > 0 {
 			restMiddleware = append(restMiddleware,
 				&BasicAuthMw{
 					Realm: "Social Harvest (reporter) API",
@@ -174,16 +174,24 @@ func main() {
 		}
 		err := handler.SetRoutes(
 			&rest.Route{"GET", "/", TopLocations},
+
+			&rest.Route{"GET", "/database/info", DatabaseInfo},
 			&rest.Route{"GET", "/territory/list", TerritoryList},
 			&rest.Route{"GET", "/link/details", LinkDetails},
+
+			&rest.Route{"GET", "/territory/aggregate/:territory/:series", TerritoryAggregateData},
+			// Simple counts for a territory
+			&rest.Route{"GET", "/territory/count/:territory/:series/:field", TerritoryCountData},
+			&rest.Route{"GET", "/territory/timeseries/count/:territory/:series/:field", TerritoryTimeseriesCountData},
+			// Messages for a territory
+			&rest.Route{"GET", "/territory/messages/:territory", TerritoryMessages},
 		)
 		if err != nil {
 			log.Fatal(err)
 		}
 
-		// TODO: separate the harvester API server from the reporter API server settings
 		// Allow the port to be configured (we need it as a string, but let the config define an int)
-		p := strconv.Itoa(socialHarvest.Config.Server.Port)
+		p := strconv.Itoa(socialHarvest.Config.ReporterServer.Port)
 		// But if it can't be parsed (maybe wasn't set) then set it to 3001
 		if p == "0" {
 			p = "3001"
