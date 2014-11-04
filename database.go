@@ -123,9 +123,9 @@ type CommonQueryParams struct {
 	Territory string `json:"territory"`
 	Network   string `json:"network,omitempty"`
 	Field     string `json:"field,omitempty"`
-	Limit     uint   `json:"limit,omitempty"`
+	Limit     uint64 `json:"limit,omitempty"`
 	Series    string `json:"series,omitempty"`
-	Skip      uint   `json:"skip,omitempty"`
+	Skip      uint64 `json:"skip,omitempty"`
 }
 
 type ResultCount struct {
@@ -150,9 +150,10 @@ type ResultAggregateFields struct {
 	TimeFrom string                              `json:"timeFrom"`
 	TimeTo   string                              `json:"timeTo"`
 	Total    int                                 `json:"total"`
+	Distinct int                                 `json:"distinct"`
 }
 
-type MessageConditions struct {
+type BasicConditions struct {
 	Gender     string `json:"contributor_gender,omitempty"`
 	Lang       string `json:"contributor_lang,omitempty"`
 	Country    string `json:"contributor_country,omitempty"`
@@ -215,7 +216,7 @@ func SanitizeCommonQueryParams(params CommonQueryParams) CommonQueryParams {
 }
 
 // Groups fields values and returns a count of occurences
-func (db *SocialHarvestDB) FieldCounts(queryParams CommonQueryParams, fields []string) ([]ResultAggregateFields, ResultCount) {
+func (db *SocialHarvestDB) FieldCounts(queryParams CommonQueryParams, fields []string, extraParams map[string]string) ([]ResultAggregateFields, ResultCount) {
 	var fieldCounts []ResultAggregateFields
 	var total ResultCount
 	sanitizedQueryParams := SanitizeCommonQueryParams(queryParams)
@@ -242,6 +243,15 @@ func (db *SocialHarvestDB) FieldCounts(queryParams CommonQueryParams, fields []s
 			buffer.WriteString(sanitizedQueryParams.To)
 			buffer.WriteString("'")
 		}
+		// optional extra params to further limit what gets counted (NOTE: the value must have the operater with it along with proper SQL, ie. if string, wrap in single quotes)
+		if len(extraParams) > 0 {
+			for k, v := range extraParams {
+				buffer.WriteString(" AND ")
+				buffer.WriteString(k)
+				buffer.WriteString(" ")
+				buffer.WriteString(v)
+			}
+		}
 
 		tQuery := buffer.String()
 		buffer.Reset()
@@ -264,6 +274,16 @@ func (db *SocialHarvestDB) FieldCounts(queryParams CommonQueryParams, fields []s
 				buffer.WriteString(sanitizedQueryParams.Territory)
 				buffer.WriteString("'")
 
+				// optional extra params to further limit what gets counted (NOTE: the value must have the operater with it along with proper SQL, ie. if string, wrap in single quotes)
+				if len(extraParams) > 0 {
+					for k, v := range extraParams {
+						buffer.WriteString(" AND ")
+						buffer.WriteString(k)
+						buffer.WriteString(" ")
+						buffer.WriteString(v)
+					}
+				}
+
 				// optional date range (can have either or both)
 				if sanitizedQueryParams.From != "" {
 					buffer.WriteString(" AND time >= '")
@@ -276,15 +296,28 @@ func (db *SocialHarvestDB) FieldCounts(queryParams CommonQueryParams, fields []s
 					buffer.WriteString("'")
 				}
 
+				buffer.WriteString(" AND ")
+				buffer.WriteString(field)
+				buffer.WriteString(" != ''")
+
 				buffer.WriteString(" GROUP BY ")
 				buffer.WriteString(field)
 
 				buffer.WriteString(" ORDER BY count DESC")
+				//buffer.WriteString(", ")
+				//buffer.WriteString(field)
+				//buffer.WriteString(" DESC")
 
-				// optional limit (in this case I don't know why one would use it - a date range would be a better limiter)
+				// optional limit (remember the date range limits results too)
 				if sanitizedQueryParams.Limit > 0 {
 					buffer.WriteString(" LIMIT ")
 					buffer.WriteString(strconv.FormatInt(int64(sanitizedQueryParams.Limit), 10))
+				}
+
+				// optional skip
+				if sanitizedQueryParams.Skip > 0 {
+					buffer.WriteString(" OFFSET ")
+					buffer.WriteString(strconv.FormatInt(int64(sanitizedQueryParams.Skip), 10))
 				}
 
 				query := buffer.String()
@@ -292,8 +325,6 @@ func (db *SocialHarvestDB) FieldCounts(queryParams CommonQueryParams, fields []s
 
 				var valueCounts []ResultAggregateCount
 				err = db.Postgres.Select(&valueCounts, query)
-
-				log.Println(query)
 				if err != nil {
 					log.Println(err)
 					continue
@@ -302,7 +333,51 @@ func (db *SocialHarvestDB) FieldCounts(queryParams CommonQueryParams, fields []s
 				count := map[string][]ResultAggregateCount{}
 				count[field] = valueCounts
 
-				fieldCount := ResultAggregateFields{Count: count, TimeFrom: sanitizedQueryParams.From, TimeTo: sanitizedQueryParams.To, Total: total.Count}
+				// Get distinct count
+				buffer.Reset()
+				buffer.WriteString("SELECT COUNT(DISTINCT ")
+				buffer.WriteString(field)
+				buffer.WriteString(") FROM ")
+				buffer.WriteString(sanitizedQueryParams.Series)
+				buffer.WriteString(" WHERE territory = '")
+				buffer.WriteString(sanitizedQueryParams.Territory)
+				buffer.WriteString("'")
+
+				// optional extra params to further limit what gets counted (NOTE: the value must have the operater with it along with proper SQL, ie. if string, wrap in single quotes)
+				if len(extraParams) > 0 {
+					for k, v := range extraParams {
+						buffer.WriteString(" AND ")
+						buffer.WriteString(k)
+						buffer.WriteString(" ")
+						buffer.WriteString(v)
+					}
+				}
+
+				// optional date range (can have either or both)
+				if sanitizedQueryParams.From != "" {
+					buffer.WriteString(" AND time >= '")
+					buffer.WriteString(sanitizedQueryParams.From)
+					buffer.WriteString("'")
+				}
+				if sanitizedQueryParams.To != "" {
+					buffer.WriteString(" AND time <= '")
+					buffer.WriteString(sanitizedQueryParams.To)
+					buffer.WriteString("'")
+				}
+
+				buffer.WriteString(" AND ")
+				buffer.WriteString(field)
+				buffer.WriteString(" != ''")
+				query = buffer.String()
+				buffer.Reset()
+				// SELECT COUNT(DISTINCT expanded_url) AS count FROM shared_links WHERE territory = 'theWalkingDead' AND TIME >= '2014-10-01' AND TIME <= '2014-11-02' AND TYPE IN('photo','image')
+				var dC int
+				err = db.Postgres.Get(&dC, query)
+				if err != nil {
+					log.Println(err)
+				}
+
+				fieldCount := ResultAggregateFields{Count: count, TimeFrom: sanitizedQueryParams.From, TimeTo: sanitizedQueryParams.To, Total: total.Count, Distinct: dC}
 				fieldCounts = append(fieldCounts, fieldCount)
 			}
 		}
@@ -380,111 +455,129 @@ func (database *SocialHarvestDB) Count(queryParams CommonQueryParams, fieldValue
 	return count
 }
 
-func (db *SocialHarvestDB) Messages(queryParams CommonQueryParams, conds MessageConditions) {
+// Allows the messages series to be queried in some general ways.
+func (database *SocialHarvestDB) Messages(queryParams CommonQueryParams, conds BasicConditions) ([]config.SocialHarvestMessage, uint64, uint64, uint64) {
+	sanitizedQueryParams := SanitizeCommonQueryParams(queryParams)
+	var results = []config.SocialHarvestMessage{}
 
+	var err error
+
+	// Must have a territory (for now)
+	if sanitizedQueryParams.Territory == "" {
+		return results, 0, sanitizedQueryParams.Skip, sanitizedQueryParams.Limit
+	}
+
+	var buffer bytes.Buffer
+	var bufferCount bytes.Buffer
+	var bufferQuery bytes.Buffer
+	bufferCount.WriteString("SELECT COUNT(*)")
+	bufferQuery.WriteString("SELECT *")
+
+	buffer.WriteString(" FROM messages WHERE territory = '")
+	buffer.WriteString(sanitizedQueryParams.Territory)
+	buffer.WriteString("'")
+
+	// optional date range (can have either or both)
+	if sanitizedQueryParams.From != "" {
+		buffer.WriteString(" AND time >= ")
+		buffer.WriteString(sanitizedQueryParams.From)
+	}
+	if sanitizedQueryParams.To != "" {
+		buffer.WriteString(" AND time <= ")
+		buffer.WriteString(sanitizedQueryParams.To)
+	}
+	if sanitizedQueryParams.Network != "" {
+		buffer.WriteString(" AND network = ")
+		buffer.WriteString(sanitizedQueryParams.Network)
+	}
+
+	// BasicConditions (various basic query conditions to be used explicitly, not in a loop, because not all fields will be available depending on the series)
+	if conds.Lang != "" {
+		buffer.WriteString(" AND contributor_lang = ")
+		buffer.WriteString(conds.Lang)
+	}
+	if conds.Country != "" {
+		buffer.WriteString(" AND contributor_country = ")
+		buffer.WriteString(conds.Country)
+	}
+	if conds.Geohash != "" {
+		// Ensure the goehash is alphanumeric.
+		// TODO: Pass these conditions through a sanitizer too, though the ORM should use prepared statements and take care of SQL injection....right? TODO: Check that too.
+		pattern := `(?i)[A-z0-9]`
+		r, _ := regexp.Compile(pattern)
+		if r.MatchString(conds.Geohash) {
+			buffer.WriteString(" AND contributor_geohash LIKE ")
+			buffer.WriteString(conds.Geohash)
+			buffer.WriteString("%")
+		}
+	}
+	if conds.Gender != "" {
+		switch conds.Gender {
+		case "-1", "f", "female":
+			buffer.WriteString(" AND contributor_gender = -1")
+			break
+		case "1", "m", "male":
+			buffer.WriteString(" AND contributor_gender = 1")
+			break
+		case "0", "u", "unknown":
+			buffer.WriteString(" AND contributor_gender = 0")
+			break
+		}
+	}
+	if conds.IsQuestion != 0 {
+		buffer.WriteString(" AND is_question = 1")
+	}
+
+	// Count here (before limit and order)
+	bufferCount.WriteString(buffer.String())
+
+	// Continue with query returning results
+	// TODO: Allow other sorting options? I'm not sure it matters because people likely want timely data. More important would be a search.
+	buffer.WriteString(" ORDER BY time DESC")
+
+	buffer.WriteString(" LIMIT ")
+	buffer.WriteString(strconv.FormatUint(sanitizedQueryParams.Limit, 10))
+
+	if (sanitizedQueryParams.Skip) > 0 {
+		buffer.WriteString(" OFFSET ")
+		buffer.WriteString(strconv.FormatUint(sanitizedQueryParams.Skip, 10))
+	}
+
+	bufferQuery.WriteString(buffer.String())
+	buffer.Reset()
+
+	query := bufferQuery.String()
+	bufferQuery.Reset()
+
+	countQuery := bufferCount.String()
+	bufferCount.Reset()
+
+	total := uint64(0)
+
+	if db.Postgres != nil {
+		var rows *sqlx.Rows
+		rows, err = db.Postgres.Queryx(query)
+		if err != nil {
+			log.Println(err)
+			return results, 0, sanitizedQueryParams.Skip, sanitizedQueryParams.Limit
+		}
+		// Map rows to array of struct
+		// TODO: Make slice of fixed size given we know limit?
+		var msg config.SocialHarvestMessage
+		for rows.Next() {
+			err = rows.StructScan(&msg)
+			if err != nil {
+				log.Println(err)
+				return results, 0, sanitizedQueryParams.Skip, sanitizedQueryParams.Limit
+			}
+			results = append(results, msg)
+		}
+
+		err = db.Postgres.Get(&total, countQuery)
+		if err != nil {
+			log.Println(err)
+		}
+	}
+
+	return results, total, sanitizedQueryParams.Skip, sanitizedQueryParams.Limit
 }
-
-// // Allows the messages series to be queried in some general ways.
-// func (database *SocialHarvestDB) Messages(queryParams CommonQueryParams, conds MessageConditions) ([]SocialHarvestMessage, uint64, uint, uint) {
-// 	sanitizedQueryParams := SanitizeCommonQueryParams(queryParams)
-// 	var results = []SocialHarvestMessage{}
-
-// 	var err error
-
-// 	// If one is even being used, connect to it and store the data
-// 	sess, err = db.Open(dbAdapter, database.Settings)
-// 	if err != nil {
-// 		log.Println(err)
-// 		return results, 0, sanitizedQueryParams.Skip, sanitizedQueryParams.Limit
-// 	}
-// 	defer sess.Close()
-
-// 	col, err = sess.Collection("messages")
-// 	if err != nil {
-// 		log.Println(err)
-// 		return results, 0, sanitizedQueryParams.Skip, sanitizedQueryParams.Limit
-// 	}
-
-// 	// optional date range (can have either or both)
-// 	if sanitizedQueryParams.From != "" {
-// 		switch database.Type {
-// 		case "mongodb":
-// 			conditions["time $gte"] = sanitizedQueryParams.From
-// 			break
-// 		default:
-// 			conditions["time >="] = sanitizedQueryParams.From
-// 			break
-// 		}
-// 	}
-// 	if sanitizedQueryParams.To != "" {
-// 		switch database.Type {
-// 		case "mongodb":
-// 			conditions["time $lte"] = sanitizedQueryParams.To
-// 			break
-// 		default:
-// 			conditions["time <="] = sanitizedQueryParams.To
-// 			break
-// 		}
-// 	}
-// 	if sanitizedQueryParams.Network != "" {
-// 		conditions["network"] = sanitizedQueryParams.Network
-// 	}
-
-// 	if sanitizedQueryParams.Territory != "" {
-// 		conditions["territory"] = sanitizedQueryParams.Territory
-// 	}
-
-// 	// MessageConditions (specific conditions for messages series)
-// 	if conds.Lang != "" {
-// 		conditions["contributor_lang"] = conds.Lang
-// 	}
-// 	if conds.Country != "" {
-// 		conditions["contributor_country"] = conds.Country
-// 	}
-// 	if conds.Geohash != "" {
-// 		// Ensure the goehash is alphanumeric.
-// 		// TODO: Pass these conditions through a sanitizer too, though the ORM should use prepared statements and take care of SQL injection....right? TODO: Check that too.
-// 		pattern := `(?i)[A-z0-9]`
-// 		r, _ := regexp.Compile(pattern)
-// 		if r.MatchString(conds.Geohash) {
-// 			switch database.Type {
-// 			case "mongodb":
-// 				conditions["contributor_geohash"] = "/" + conds.Geohash + ".*/"
-// 				break
-// 			default:
-// 				conditions["contributor_geohash LIKE"] = conds.Geohash + "%"
-// 				break
-// 			}
-// 		}
-// 	}
-// 	if conds.Gender != "" {
-// 		switch conds.Gender {
-// 		case "-1", "f", "female":
-// 			conditions["contributor_gender"] = -1
-// 			break
-// 		case "1", "m", "male":
-// 			conditions["contributor_gender"] = 1
-// 			break
-// 		case "0", "u", "unknown":
-// 			conditions["contributor_gender"] = 0
-// 			break
-// 		}
-// 	}
-// 	if conds.IsQuestion != 0 {
-// 		conditions["is_question"] = 1
-// 	}
-
-// 	// TODO: Allow other sorting options? I'm not sure it matters because people likely want timely data. More important would be a search.
-// 	res := col.Find(conditions).Skip(sanitizedQueryParams.Skip).Limit(sanitizedQueryParams.Limit).Sort("-time")
-// 	defer res.Close()
-// 	total, resCountErr := res.Count()
-// 	if resCountErr != nil {
-// 		return results, 0, sanitizedQueryParams.Skip, sanitizedQueryParams.Limit
-// 	}
-// 	resErr := res.All(&results)
-// 	if resErr != nil {
-// 		return results, total, sanitizedQueryParams.Skip, sanitizedQueryParams.Limit
-// 	}
-
-// 	return results, total, sanitizedQueryParams.Skip, sanitizedQueryParams.Limit
-// }

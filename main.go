@@ -173,16 +173,27 @@ func main() {
 			PreRoutingMiddlewares:    restMiddleware,
 		}
 		err := handler.SetRoutes(
-			&rest.Route{"GET", "/", TopLocations},
 
 			&rest.Route{"GET", "/database/info", DatabaseInfo},
 			&rest.Route{"GET", "/territory/list", TerritoryList},
 			&rest.Route{"GET", "/link/details", LinkDetails},
 
-			&rest.Route{"GET", "/territory/aggregate/:territory/:series", TerritoryAggregateData},
 			// Simple counts for a territory
 			&rest.Route{"GET", "/territory/count/:territory/:series/:field", TerritoryCountData},
 			&rest.Route{"GET", "/territory/timeseries/count/:territory/:series/:field", TerritoryTimeseriesCountData},
+			// Grouped counts
+			&rest.Route{"GET", "/territory/aggregate/:territory/:series", TerritoryAggregateData},
+			// Top values for a territory
+			// All of these use the same aggregate query, some routes have extra parameters not easily expressed in a querystring...
+			// Of course we could use a POST with JSON, but this is more convenient. other routes are merely convenience and could instead use the aggregate endpoint.
+			&rest.Route{"GET", "/territory/top/images/:territory", TerritoryTopImages},
+			&rest.Route{"GET", "/territory/top/videos/:territory", TerritoryTopVideos},
+			&rest.Route{"GET", "/territory/top/audio/:territory", TerritoryTopAudio},
+			&rest.Route{"GET", "/territory/top/links/:territory", TerritoryTopLinks},
+			&rest.Route{"GET", "/territory/top/keywords/:territory", TerritoryTopKeywords},
+			&rest.Route{"GET", "/territory/top/hashtags/:territory", TerritoryTopHashtags},
+			// This comes with some options like "precision" which will adjust the clustering (geohash string length)
+			&rest.Route{"GET", "/territory/top/locations/:territory", TerritoryTopLocations},
 			// Messages for a territory
 			&rest.Route{"GET", "/territory/messages/:territory", TerritoryMessages},
 		)
